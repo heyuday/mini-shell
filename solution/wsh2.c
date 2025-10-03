@@ -11,7 +11,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#define MAX_PIPE_CMDS 128
 
 int rc;
 HashMap *alias_hm = NULL;
@@ -406,299 +405,6 @@ int builtin_history(int argc, char **argv)
 }
 
 /**
- * @Brief Parse a command line into arguments without alias substitution
- */
-static int split_pipeline(const char *line, char *segments[], int max_segs)
-{
-  int count = 0;
-  int in_single = 0;
-  const char *seg_start = line;
-
-  for (const char *p = line;; p++)
-  {
-    char c = *p;
-    if (c == '\'')
-      in_single = !in_single;
-    if ((c == '|' && !in_single) || c == '\0')
-    {
-      if (count >= max_segs)
-        return -1; // too many
-      size_t len = (size_t)(p - seg_start);
-      char *seg = (char *)malloc(len + 1);
-      if (!seg)
-      {
-        perror("malloc");
-        return -1;
-      }
-      memcpy(seg, seg_start, len);
-      seg[len] = '\0';
-      // advance seg_start past the delimiter (if not at end)
-      segments[count++] = seg;
-      if (c == '\0')
-        break;
-      seg_start = p + 1;
-    }
-  }
-  return count;
-}
-/**
- * @Brief Trim leading and trailing whitespace in place
- */
-static void trim_inplace(char *s)
-{
-  if (!s)
-    return;
-  char *p = s;
-  while (*p && isspace((unsigned char)*p))
-    p++;
-  if (p != s)
-    memmove(s, p, strlen(p) + 1);
-  size_t n = strlen(s);
-  while (n && isspace((unsigned char)s[n - 1]))
-    s[--n] = '\0';
-}
-
-/**
- * @Brief Expand alias for a single command segment (no pipeline)
- */
-static char *expand_alias_for_segment(char *segment)
-{
-  // parse once to get argv[0]
-  int argc = 0;
-  char *argv_local[MAX_ARGS];
-  parseline_no_subst(segment, argv_local, &argc);
-  if (argc == 0)
-  {
-    return strdup(segment);
-  }
-  char *aval = alias_hm ? hm_get(alias_hm, argv_local[0]) : NULL;
-
-  for (int i = 0; i < argc; i++)
-    free(argv_local[i]);
-  if (!aval)
-    return strdup(segment);
-
-
-  const char *p = segment;
-  while (*p && isspace((unsigned char)*p))
-    p++;
-  while (*p && !isspace((unsigned char)*p))
-    p++;                // end first token
-  const char *rest = p; // includes spaces
-  size_t newlen = strlen(aval) + strlen(rest) + 1;
-  char *expanded = (char *)malloc(newlen);
-  if (!expanded)
-  {
-    perror("malloc");
-    return strdup(segment);
-  }
-  strcpy(expanded, aval);
-  strcat(expanded, rest);
-  return expanded;
-}
-/**
- * @Brief Check if a command exists (builtin, absolute/relative, or in PATH)
- */
-static int command_exists(char **argv)
-{
-  if (!argv[0] || !*argv[0])
-    return 0;
-
-  // builtin
-  if (builtin_is_builtin_name(argv[0]))
-    return 1;
-
-  // absolute/relative
-  if (argv[0][0] == '/' || (argv[0][0] == '.' && argv[0][1] == '/'))
-    return access(argv[0], X_OK) == 0;
-
-  // PATH
-  char full[1024];
-  return find_in_path(argv[0], full, sizeof(full));
-}
-
-/**
- * @Brief Execute a single command (no pipeline)
- */
-static void exec_one_command(int argc, char **argv)
-{
-  if (argc == 0)
-    _exit(127);
-
-  if (builtin_is_builtin_name(argv[0]))
-  {
-    int code = EXIT_FAILURE;
-    if (!strcmp(argv[0], "cd"))
-      code = built_in_cd(argc, argv);
-    else if (!strcmp(argv[0], "path"))
-      code = built_in_path(argc, argv);
-    else if (!strcmp(argv[0], "which"))
-      code = builtin_which(argc, argv);
-    else if (!strcmp(argv[0], "alias"))
-      code = builtin_alias(argc, argv);
-    else if (!strcmp(argv[0], "unalias"))
-      code = builtin_unalias(argc, argv);
-    else if (!strcmp(argv[0], "history"))
-      code = builtin_history(argc, argv);
-    else if (!strcmp(argv[0], "exit"))
-      code = EXIT_SUCCESS; // ignore in pipeline
-    _exit(code == EXIT_SUCCESS ? 0 : 1);
-  }
-
-  // external
-  execute_external_command(argv); // this _exit(127) on failure
-}
-
-/**
- * @Brief Run a pipeline command line
- */
-static int run_pipeline(const char *line)
-{
-  char *segs_raw[MAX_PIPE_CMDS];
-  int n = split_pipeline(line, segs_raw, MAX_PIPE_CMDS);
-  if (n < 0)
-  {
-    fprintf(stderr, "Empty command segment in pipeline\n");
-    return EXIT_FAILURE;
-  }
-  if (n == 1)
-  {
-    free(segs_raw[0]);
-    return -2;
-  } 
-
-  char *segs_expanded[MAX_PIPE_CMDS] = {0};
-  char *argvs[MAX_PIPE_CMDS][MAX_ARGS];
-  int argcs[MAX_PIPE_CMDS];
-  int processed = 0;
-
-  int invalid = 0, empty_seg = 0;
-
-  for (int i = 0; i < n; i++)
-  {
-    trim_inplace(segs_raw[i]);
-    if (segs_raw[i][0] == '\0')
-    {
-      empty_seg = 1;
-      break;
-    }
-
-    segs_expanded[i] = expand_alias_for_segment(segs_raw[i]);
-
-    parseline_no_subst(segs_expanded[i], argvs[i], &argcs[i]);
-
-    if (argcs[i] == 0)
-    {
-      empty_seg = 1;
-      break;
-    }
-
-    if (!command_exists(argvs[i]))
-    {
-      fprintf(stderr, "Command not found or not an executable: %s\n", argvs[i][0]);
-      invalid = 1;
-    }
-    processed = i + 1;
-  }
-
-  if (empty_seg)
-  {
-    fprintf(stderr, "Empty command segment in pipeline\n");
-    for (int i = 0; i < n; i++)
-      free(segs_raw[i]);
-    for (int i = 0; i < processed; i++)
-    {
-      free(segs_expanded[i]);
-      for (int j = 0; j < argcs[i]; j++)
-        free(argvs[i][j]);
-    }
-    return EXIT_FAILURE;
-  }
-  if (invalid)
-  {
-    for (int i = 0; i < n; i++)
-      free(segs_raw[i]);
-    for (int i = 0; i < processed; i++)
-    {
-      free(segs_expanded[i]);
-      for (int j = 0; j < argcs[i]; j++)
-        free(argvs[i][j]);
-    }
-    return EXIT_FAILURE;
-  }
-
-  int pipes[MAX_PIPE_CMDS - 1][2];
-  for (int i = 0; i < n - 1; i++)
-  {
-    if (pipe(pipes[i]) == -1)
-    {
-      perror("pipe"); /* cleanup */
-      for (int k = 0; k < n; k++)
-      {
-        free(segs_raw[k]);
-        free(segs_expanded[k]);
-        for (int j = 0; j < argcs[k]; j++)
-          free(argvs[k][j]);
-      }
-      return EXIT_FAILURE;
-    }
-  }
-
-  pid_t pids[MAX_PIPE_CMDS];
-  for (int i = 0; i < n; i++)
-  {
-    pid_t pid = fork();
-    if (pid < 0)
-    {
-      perror("fork"); /* parent error */
-    }
-    if (pid == 0)
-    {
-      
-      if (i > 0)
-        dup2(pipes[i - 1][0], STDIN_FILENO);
-      if (i < n - 1)
-        dup2(pipes[i][1], STDOUT_FILENO);
-      // close all pipe fds in child
-      for (int k = 0; k < n - 1; k++)
-      {
-        close(pipes[k][0]);
-        close(pipes[k][1]);
-      }
-      // run command (builtins or external)
-      exec_one_command(argcs[i], argvs[i]);
-      _exit(127); // not reached
-    }
-    pids[i] = pid;
-  }
-
-  for (int i = 0; i < n - 1; i++)
-  {
-    close(pipes[i][0]);
-    close(pipes[i][1]);
-  }
-
-  int status = 0;
-  for (int i = 0; i < n; i++)
-  {
-    int st;
-    waitpid(pids[i], &st, 0);
-    if (i == n - 1)
-      status = st;
-  }
-  int result = (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
-
-  for (int i = 0; i < n; i++)
-  {
-    free(segs_raw[i]);
-    free(segs_expanded[i]);
-    for (int j = 0; j < argcs[i]; j++)
-      free(argvs[i][j]);
-  }
-  return result;
-}
-
-/**
  * @Brief Process a command line
  */
 void process_command(const char *cmdline)
@@ -726,30 +432,6 @@ void process_command(const char *cmdline)
 
   if (argc == 0)
   {
-    free(line);
-    return;
-  }
-
-  int has_bar = 0;
-  {
-    int in_single = 0;
-    for (char *p = line; *p; p++)
-    {
-      if (*p == '\'')
-        in_single = !in_single;
-      else if (*p == '|' && !in_single)
-      {
-        has_bar = 1;
-        break;
-      }
-    }
-  }
-  if (has_bar)
-  {
-    if (!suppress_history)
-      da_put(history_da, line);
-    int res = run_pipeline(line);
-    rc = (res == -2) ? rc : res; // -2 means "not actually a pipeline", else set rc
     free(line);
     return;
   }
@@ -805,13 +487,16 @@ void process_command(const char *cmdline)
   char *aval = hm_get(alias_hm, argv[0]);
   if (aval)
   {
+    // rebuild: aval + (line after the first token)
+    // find start and end of first token in 'line'
     char *p = line;
     while (*p && isspace((unsigned char)*p))
       p++;
     while (*p && !isspace((unsigned char)*p))
-      p++;          
-    char *rest = p; 
+      p++;          // end of first token
+    char *rest = p; // from p to end (including spaces)
 
+    // new buffer: aval + rest
     size_t newlen = strlen(aval) + strlen(rest) + 1;
     char *expanded = malloc(newlen);
     if (!expanded)
