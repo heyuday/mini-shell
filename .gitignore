@@ -1,7 +1,17 @@
+# macOS system files
 **/.DS_Store
-.idea/
+
+# IDE settings
 .vscode/
-tests/tests-out/
-solution/build/
-solution/wsh
-solution/wsh-dbg
+.idea/
+
+# Build artifacts
+code/build/
+code/wsh
+code/wsh-dbg
+
+# Object files and temporary binaries
+*.o
+*.out
+*.log
+core
