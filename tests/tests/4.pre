@@ -1,1 +1,0 @@
-mkdir tmp; gcc tests/dummy_echo.c -o tmp/echo

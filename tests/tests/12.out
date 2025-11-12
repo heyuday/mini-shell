@@ -1,7 +1,0 @@
-hello
-world
-alias e = echo
-e hello
-echo world
-e hello
-history 2
