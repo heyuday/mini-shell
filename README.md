@@ -40,4 +40,4 @@ It supports interactive and batch modes, command parsing, process control, built
 - **`wsh-dbg`** — compiled debug binary.  
 
 
-Each module is isolated for clarity and reusability, allowing the shell to scale from command parsing to multi-process pipelines.
+Each module is isolated for clarity and reusability, allowing the shell to scale from command parsing to multiprocess pipelines.
