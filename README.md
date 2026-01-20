@@ -1,4 +1,4 @@
-# 🐚 USH — A Lightweight Unix-Like Shell in C
+# USH — A Lightweight Unix-Like Shell in C
 
 <img width="480" height="240" alt="image" src="https://github.com/user-attachments/assets/51002c2e-5235-4a25-a761-3d35a41c7c24" />
 
