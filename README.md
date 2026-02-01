@@ -26,7 +26,7 @@ It supports interactive and batch modes, command parsing, process control, built
 
 ---
 
-## 🧠 Architecture Overview
+## Architecture Overview
 
 - **`wsh.c`** — main shell loop handling input parsing, process creation, and command execution.  
 - **`dynamic_array.c/h`** — custom resizable array implementation for storing parsed tokens dynamically.  
